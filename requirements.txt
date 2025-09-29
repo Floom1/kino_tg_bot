@@ -1,0 +1,10 @@
+aiogram>=3.3,<4
+APScheduler>=3.10,<4
+beautifulsoup4>=4.12,<5
+requests>=2.31,<3
+lxml>=4.9,<6
+python-dotenv>=1.0,<2
+playwright>=1.44,<2
+pytz>=2024.1
+types-requests>=2.31,<3
+types-beautifulsoup4>=4.12,<5
