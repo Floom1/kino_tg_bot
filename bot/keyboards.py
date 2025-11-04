@@ -9,6 +9,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Все на сегодня")],
             [KeyboardButton(text="По кинотеатрам"), KeyboardButton(text="По дате")],
+            [KeyboardButton(text="События")]
         ],
         resize_keyboard=True,
         one_time_keyboard=False,

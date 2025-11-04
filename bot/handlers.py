@@ -2,10 +2,15 @@ from datetime import date, datetime
 from typing import Literal
 import asyncio
 
+import logging
 from aiogram import Router, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message, CallbackQuery
+from bot.config import settings
 
+from bot.storage import events_db
+from bot.utils.time_utils import is_date_in_future
+from bot.config import settings
 from .parsers.prada import fetch_prada_titles
 from .parsers.afisha_karo import fetch_karo_titles, fetch_karo_titles_quick
 from .parsers.kino_format import fetch_kinoformat_titles
@@ -27,10 +32,20 @@ async def cmd_start(message: Message) -> None:
         "Привет! Я помогу отслеживать новые фильмы в кинотеатрах Балашихи/Реутова.\n\n"
         "Доступные команды:\n"
         "/today — список фильмов на сегодня по всем кинотеатрам\n"
-        "/schedule &lt;кинотеатр&gt; &lt;YYYY-MM-DD|DD.MM.YYYY&gt; — например: /schedule prada 2025-09-28\n\n"
-        "Кинотеатры: prada, karo, kinoformat"
+        "/schedule <кинотеатр> <дата> — например: /schedule prada 2025-09-28\n"
+        "Кинотеатры: prada, karo, kinoformat\n\n"
+        "Для напоминаний о событиях:\n"
+        "/add_event <дата> <название> — добавить событие\n"
+        "/setgroup — установить группу для напоминаний\n"
+        "/list_events — посмотреть все события\n"
+        "/delete_event <id> — удалить событие\n\n"
+        "Для отсчёта до Нового года:\n"
+        "/newyear — показать стикер с отсчетом до Нового года\n"
+        "/sticker — отправить стикер из пака\n\n"
+        "Вы также можете использовать кнопки меню:"
     )
-    await message.answer(text, reply_markup=main_menu_kb())
+    # Отправляем без HTML-разметки
+    await message.answer(text, parse_mode=None, reply_markup=main_menu_kb())
 
 
 def _parse_date_any(fmt: str) -> date | None:
@@ -171,3 +186,138 @@ async def cb_pick_cinema_date(q: CallbackQuery) -> None:
     titles = await get_titles_for(cinema, d, fast=True)  # type: ignore[arg-type]
     await _send_chunked(q.message, f"<b>{cinema} — {iso}</b>", titles)
     await q.answer()
+
+
+# Команда для установки группы
+@router.message(Command("setgroup"))
+async def set_group_handler(message: Message):
+    # Проверяем, что сообщение пришло из группы
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.answer("❌ Эту команду нужно отправить в группе, куда добавлен бот")
+        return
+
+    # Сохраняем ID группы как дефолтную
+    events_db.set_default_group(message.chat.id)
+
+    # Отправляем подтверждение
+    await message.answer(f"✅ Группа установлена! ID: {message.chat.id}")
+
+# Команда добавления события
+@router.message(Command("add_event"))
+async def add_event_handler(message: Message):
+    # Получаем аргументы команды
+    text = message.text
+    parts = text.split(maxsplit=2)  # Разбиваем на 3 части: команда, дата, название
+
+    if len(parts) < 3:
+        await message.answer("❌ Используйте формат: /add_event <дата> <название>\nПример: /add_event 2025-12-20 День рождения Вани", parse_mode=None)
+        return
+
+    date_str = parts[1]
+    event_name = parts[2]
+
+    # Проверяем корректность даты
+    try:
+        # Проверяем формат даты
+        datetime.strptime(date_str, "%Y-%m-%d")
+        # Проверяем, что дата не в прошлом
+        if not is_date_in_future(date_str):
+            await message.answer("❌ Дата не может быть в прошлом", parse_mode=None)
+            return
+    except ValueError:
+        await message.answer("❌ Неверный формат даты. Используйте YYYY-MM-DD", parse_mode=None)
+        return
+
+    # Добавляем событие в базу данных
+    try:
+        # Получаем дефолтную группу
+        default_group = events_db.get_default_group()
+        if default_group == 0:
+            await message.answer("❌ Сначала установите группу через /setgroup")
+            return
+
+        events_db.add_event(event_name, date_str, default_group)
+        await message.answer(f"✅ Событие '{event_name}' добавлено на {date_str}")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при добавлении события: {str(e)}")
+
+# Команда списка событий
+@router.message(Command("list_events"))
+async def list_events_handler(message: Message):
+    events = events_db.get_all_events()
+    if not events:
+        await message.answer("📝 Нет добавленных событий")
+        return
+
+    text = "📝 Список событий:\n"
+    for event in events:
+        event_id, name, event_date, group_chat_id = event
+        text += f"• {event_id}: {name} ({event_date})\n"
+
+    await message.answer(text)
+
+# Команда удаления события
+@router.message(Command("delete_event"))
+async def delete_event_handler(message: Message):
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("❌ Используйте формат: /delete_event <id>", parse_mode=None)
+        return
+
+    try:
+        event_id = int(parts[1])
+        events_db.delete_event(event_id)
+        await message.answer(f"✅ Событие #{event_id} удалено")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при удалении события: {str(e)}")
+
+# Команда отправки стикера
+@router.message(Command("sticker"))
+async def send_sticker_handler(message: Message):
+    if not settings.STICKER_IDS:
+        await message.answer("❌ Стикеры не настроены. Добавьте STICKER_ID в .env")
+        return
+
+    await message.answer_sticker(settings.STICKER_IDS)
+
+@router.message(F.sticker)
+async def get_sticker_id(message: Message):
+    # Получаем file_id стикера
+    sticker_id = message.sticker.file_id
+
+    # Отправляем его пользователю (чтобы можно было скопировать)
+    await message.answer(f"📋 Файл ID этого стикера:\n`{sticker_id}`", parse_mode="Markdown")
+
+    # Записываем в лог для надежности
+    logging.info(f"Получен стикер с file_id: {sticker_id}")
+
+@router.message(Command("newyear"))
+async def send_newyear_sticker(message: Message):
+    new_year = date(2026, 1, 1)
+    today = date.today()
+    days_remaining = (new_year - today).days
+
+    if days_remaining > 100:
+        days_remaining = 100
+    elif days_remaining < -1:
+        days_remaining = -1
+
+    # Используем settings.STICKER_IDS
+    sticker_id = settings.STICKER_IDS.get(days_remaining)
+
+    if sticker_id:
+        await message.answer_sticker(sticker_id)
+    else:
+        await message.answer("❌ Стикера для этого количества дней не найдено")
+
+
+@router.message(F.text == "События")
+async def events_menu(message: Message):
+    text = (
+        "Меню событий:\n"
+        "/add_event <дата> <название> — добавить событие\n"
+        "/list_events — посмотреть все события\n"
+        "/delete_event <id> — удалить событие\n"
+        "/setgroup — установить группу для напоминаний"
+    )
+    await message.answer(text, parse_mode=None)

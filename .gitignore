@@ -2,3 +2,9 @@
 /.env
 /.mypy_cache
 /venv
+bot/__pycache__/config.cpython-310.pyc
+bot/__pycache__/config.cpython-310.pyc
+bot/__pycache__/handlers.cpython-310.pyc
+bot/__pycache__/keyboards.cpython-310.pyc
+bot/__pycache__/scheduler.cpython-310.pyc
+bot/storage/__pycache__/__init__.cpython-310.pyc
